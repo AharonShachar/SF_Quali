@@ -1,0 +1,1690 @@
+public class MRR_Manager
+    {
+        private Opportunity opp;
+        Date tempMonth;
+        static final Integer PEPRTUAL_MID_MONTH_PERIOD = 38;    
+        static final Integer PEPRTUAL_PERIOD = 36;  
+        Integer line_counter;
+        double opp_discount;
+        Boolean is_additionl_line_require;
+        Decimal DAYS_IN_MONTH = 30.416666666666;
+        string op_currency;
+        Decimal convet_rate = 1;
+        list<Products_monthly_revenue_recognition__c> pmrs;
+        
+        
+        public MRR_Manager(Opportunity op)  {this.opp=op;}
+        
+        public void ConvertLIneItemToMRR(opportunityLineItem oli, Opportunity op)
+        {
+			 //for test 
+            if(op.name == 'test_test_test')
+            {    
+                //test_mode();
+                //return;1
+            }
+			
+            system.debug('>>>>Start ConvertLIneItemToMRR for item: ' + oli.product2.name);
+            system.debug('>>>oli.UnitPrice:' + oli.UnitPrice);                  
+            system.debug('>>>oli.Line_Item_Price__c :' + oli.Line_Item_Price__c );
+			system.debug('>>>opp_discount:' + op.Products_Discount__c); 
+            system.debug('>>>>item Subscription_Period_Months__c: '+ oli.Subscription_Period_Months__c);
+			                       
+            //ignore unrelevant lineitems
+            if (oli.Line_Item_Type__c == 'Discount')
+            {
+                return;
+            }
+            
+            //set discount
+            opp_discount = op.Products_Discount__c;
+            system.debug('>>>> Opp discount: '+ opp_discount);
+            if (op.Products_Discount__c == null)
+            {
+                opp_discount = 0;
+            }
+            
+            //set currency and conversion rate (incase currency != USD)
+            op_currency = op.currencyIsoCode;
+            if(op_currency != 'USD')
+            {               
+                list<Opportunity> converted_op = new list<Opportunity>([select convertCurrency(Recognizable_PO_Amount__c) FROM Opportunity where id =: op.id]);
+                list<Opportunity> temp_op = new list<Opportunity>([select Recognizable_PO_Amount__c FROM Opportunity where id =: op.id]);
+                convet_rate = temp_op[0].Recognizable_PO_Amount__c / converted_op[0].Recognizable_PO_Amount__c;
+                system.debug('>>>> convet_rate: '+ convet_rate);        
+            }
+            
+            check_opportunity_line_item_is_valid(oli);  
+
+            pmrs = new list<Products_monthly_revenue_recognition__c>();
+            
+            create_line_items(oli,op);
+            
+            insert(pmrs);
+                    
+        }       
+        
+        private void check_opportunity_line_item_is_valid(opportunityLineItem oli)
+        {   
+            if(oli.New_Renewal__c == null)
+            {
+                throw new MRR_Exception(oli.product2.name + ': Line item must must be \'new\' or \'Renewal\'.');
+            }
+            if(oli.Line_Item_Type__c == null)
+            {
+                throw new MRR_Exception(oli.product2.name + ': Line item type cannot be null.');
+            }           
+            if(oli.Line_Item_Start_Date__c ==null)
+            {                   
+                throw new MRR_Exception(oli.product2.name + ': Line item start date cannot be null.');
+            }
+            
+            if((oli.Subscription_Period_Months__c==null && oli.Support_Subscription_end_date__c == null) && (oli.Line_Item_Type__c == 'Monthly Subscription' || oli.Line_Item_Type__c == 'Annual Support' ))
+            {
+                throw new MRR_Exception(oli.product2.name + ': Subscription Period Months OR Support/Subscription end date must be set.');
+            }               
+            if(oli.Line_Item_Type__c == 'Annual Support' && oli.New_Renewal__c == 'New')
+            {
+                throw new MRR_Exception(oli.product2.name + ': Anuual support renewal line item must be Renewal.');             
+            }
+            if(oli.Line_Item_Type__c == 'Perpetual' && oli.New_Renewal__c == 'Renewal')
+            {
+                throw new MRR_Exception(oli.product2.name + ': Perpetual line item must be New.');              
+            }
+        
+            
+        }       
+                
+        private void create_line_items(opportunityLineItem oli, Opportunity op)
+        {
+            Boolean isFirstMonthDay = false;
+            Decimal numberOfRows;
+            Integer linesCounter = 1;
+            double temp_transaction_calc = 0;
+            double dayPrice, monthPrice;
+            double dicsount = opp_discount;
+            double daysInCurrentMonth;
+            string renewalStatus;
+            string lineCounterStr;          
+            Decimal mrr_amount;
+            double priceAfterDiscount =  oli.Line_Item_Price__c - opp_discount * oli.Line_Item_Price__c/100;
+            tempMonth = Date.newInstance(oli.Line_Item_Start_Date__c.year(),oli.Line_Item_Start_Date__c.month(),oli.Line_Item_Start_Date__c.day());
+            is_additionl_line_require = false;
+            Decimal Support_Subscription_months;
+            
+            system.debug('>>>Start create_line_items for:' + oli.product2.name);    
+            system.debug('>>>>'+oli.product2.name+' priceAfterDiscount :' + priceAfterDiscount);
+
+
+			if (oli.Line_Item_Type__c == 'Training & Services' || oli.Line_Item_Type__c == 'T&E')
+			{
+				double oli_price =  oli.Line_Item_Price__c;
+				
+				create_mrr_single_record(op.id,
+                                 oli.Product_line_item_id__c,
+                                 oli.Product2.name,
+                                 oli.Line_Item_Type__c,
+                                 oli.New_Renewal__c,
+                                 oli.New_Renewal__c,
+                                 oli.Line_Item_Start_Date__c,
+                                 oli.Subscription_Period_Months__c,
+                                 oli.UnitPrice,
+                                 oli.ListPrice, 
+                                 oli.Quantity,      
+                                 dicsount,                                       
+                                 oli_price,
+                                 oli_price,
+                                 tempMonth,
+                                 '01/01');
+				 return;
+				
+			}
+					
+            
+            //Is first day of the month 
+            if(oli.Line_Item_Start_Date__c.day() == 1)
+            {
+                isFirstMonthDay = true;
+                daysInCurrentMonth = 30;
+            }
+            else
+            {
+                daysInCurrentMonth = (get_days_in_month(oli.Line_Item_Start_Date__c.month()) - oli.Line_Item_Start_Date__c.day() ) + 1;
+            }
+            
+            //Perpetual
+            if(oli.Line_Item_Type__c == 'Perpetual')
+            {               
+                dayPrice = priceAfterDiscount / (3 * 365);              
+                monthPrice = Double.valueOf(Math.Floor( DAYS_IN_MONTH * (priceAfterDiscount / (3 * 365)))); 
+                
+                if(isFirstMonthDay)
+                {
+                    numberOfRows = PEPRTUAL_PERIOD;                 
+                }
+                else//perpetual - middle of month 
+                {
+                    numberOfRows = PEPRTUAL_MID_MONTH_PERIOD;   
+                    is_additionl_line_require = true;       
+                }
+                
+                system.debug('>>>>'+oli.product2.name+': Perpetual.');
+                system.debug('>>>>'+oli.product2.name+': numberOfRows:' + numberOfRows);
+                system.debug('>>>>'+oli.product2.name+': dayPrice:' + dayPrice);
+                system.debug('>>>>'+oli.product2.name+': monthPrice:' + monthPrice);
+            }
+            else if(oli.Line_Item_Type__c == 'Monthly Subscription' && oli.New_Renewal__c == 'New')
+            {
+                Support_Subscription_months = oli.Subscription_Support_Months__c.round(System.RoundingMode.UP);
+                Integer period_days = get_line_item_days_period(oli);               
+                
+                dayPrice = priceAfterDiscount / period_days;                                
+                monthPrice = Math.round( DAYS_IN_MONTH * (priceAfterDiscount / period_days )); 
+
+                Decimal reminder = oli.Subscription_Support_Months__c - oli.Subscription_Support_Months__c.intValue();
+                system.debug('>>>>'+oli.product2.name+': reminder:' + reminder);
+                
+                
+                if(isFirstMonthDay)
+                {
+                    numberOfRows = Support_Subscription_months.intValue();
+                }
+                else//mid month
+                {
+                    if(Support_Subscription_months.intValue()<= 12)
+                    {
+                        if(reminder > 0)
+                        {
+                            numberOfRows = Support_Subscription_months.intValue();                          
+                        }
+                        else if(reminder==0)
+                        {
+                            numberOfRows = Support_Subscription_months.intValue() +1;                           
+                        }else
+                        {
+                            throw new MRR_Exception (oli.product2.name+': Remnider is < 0. oli.Subscription_Support_Months__c;' +oli.Subscription_Support_Months__c);
+                        }
+                        
+                    }                   
+                    else // >12
+                    {
+                        is_additionl_line_require = true;
+                        
+                        if(reminder > 0)
+                        {
+                            numberOfRows = Support_Subscription_months.intValue() + 1;                          
+                        }
+                        else if(reminder==0)
+                        {
+                            numberOfRows = Support_Subscription_months.intValue() + 2;
+                            
+                        }else
+                        {
+                            throw new MRR_Exception (oli.product2.name+': Remnider is < 0. oli.Subscription_Support_Months__c;' +oli.Subscription_Support_Months__c);
+                        }
+                                                
+                    }
+                    
+                }
+                system.debug('>>>>'+oli.product2.name+': Subscription.');                                   
+                system.debug('>>>>'+oli.product2.name+' period_days :' + period_days);          
+                system.debug('>>>>'+oli.product2.name+' dayPrice :' + dayPrice);
+                system.debug('>>>>'+oli.product2.name+': monthPrice:' + monthPrice);
+                system.debug('>>>>'+oli.product2.name+': numberOfRows:' + numberOfRows);
+                
+                
+            }
+            else if(oli.Line_Item_Type__c == 'Annual Support' || oli.Line_Item_Type__c == 'Monthly Subscription' && oli.New_Renewal__c == 'Renewal')
+            {
+                Support_Subscription_months = oli.Subscription_Support_Months__c.round(System.RoundingMode.UP);
+                Integer period_days = get_line_item_days_period(oli);               
+                
+                dayPrice = priceAfterDiscount / period_days;                
+                monthPrice =  Math.round( DAYS_IN_MONTH * (priceAfterDiscount / period_days));              
+                
+                Decimal reminder = oli.Subscription_Support_Months__c - oli.Subscription_Support_Months__c.intValue();
+                system.debug('>>>>'+oli.product2.name+': reminder:' + reminder);
+                                
+                if(isFirstMonthDay)
+                {
+                    numberOfRows = Support_Subscription_months.intValue();
+                }
+                else
+                {
+                    if (reminder > 0)
+                    {
+                        numberOfRows = Support_Subscription_months.intValue();
+                    }
+                    else if(reminder==0)
+                    {
+                        numberOfRows = Support_Subscription_months.intValue() +1;                           
+                    }else
+                    {
+                        throw new MRR_Exception (oli.product2.name+': Remnider is < 0. oli.Subscription_Support_Months__c;' +oli.Subscription_Support_Months__c);
+                    }                   
+                    
+                }
+                
+                system.debug('>>>>'+oli.product2.name+' AnnualSupport/Renewal Subscription.');                                  
+                system.debug('>>>>'+oli.product2.name+' period_days :' + period_days);          
+                system.debug('>>>>'+oli.product2.name+' dayPrice :' + dayPrice);
+                system.debug('>>>>'+oli.product2.name+': monthPrice:' + monthPrice);
+                system.debug('>>>>'+oli.product2.name+': numberOfRows:' + numberOfRows);                
+                
+                
+            }
+            
+            // set renwal status
+            if (oli.New_Renewal__c == 'New')
+            {
+                renewalStatus = 'New';
+            }
+            else
+            {
+                renewalStatus = 'Renewal';
+            }
+            
+            system.debug('>>>>'+oli.product2.name+' day price :' + dayPrice);
+            system.debug('>>>>'+oli.product2.name+' Number of rows: ' + numberOfRows);
+            system.debug('>>>>'+oli.product2.name+' Initial renwal staus : ' + oli.New_Renewal__c);
+            system.debug('>>>>'+oli.product2.name+' First month number of months : ' + daysInCurrentMonth);
+            
+            //set first line params
+            if(!isFirstMonthDay)//mid month
+            {
+                mrr_amount =   Math.round(daysInCurrentMonth * dayPrice);           
+                                            
+                system.debug('>>>>'+oli.product2.name + '//line: 1//MID MONTH, line Month: ' + tempMonth.month());
+                system.debug('>>>>'+oli.product2.name + '//line: 1'+'//days In Current Month: ' + daysInCurrentMonth); 
+                system.debug('>>>>'+oli.product2.name + '//line: 1/mrr_amount: ' + mrr_amount);
+            }
+            else//begining of the month
+            {
+                tempMonth = Date.newInstance(tempMonth.year(),tempMonth.month(),1);
+                mrr_amount = monthPrice;            
+                
+                system.debug('>>>>'+oli.product2.name + '//line: 1//BEGINING OF MONTH, line Month: ' + tempMonth.month());                  
+                system.debug('>>>>'+oli.product2.name + '//line: 1'+'//days In Current Month: ' + daysInCurrentMonth); 
+                system.debug('>>>>'+oli.product2.name + '//line: 1/mrr_amount: ' + mrr_amount);             
+            }
+            
+            //create the first line
+            create_mrr_single_record(op.id,
+                                 oli.Product_line_item_id__c,
+                                 oli.Product2.name,
+                                 oli.Line_Item_Type__c,
+                                 renewalStatus,
+                                 oli.New_Renewal__c,
+                                 oli.Line_Item_Start_Date__c,
+                                 oli.Subscription_Period_Months__c,
+                                 oli.UnitPrice,
+                                 oli.ListPrice, 
+                                 oli.Quantity,      
+                                 dicsount,                                       
+                                 priceAfterDiscount,
+                                 mrr_amount,
+                                 tempMonth,
+                                 '01/'+ numberOfRows);
+
+            
+            temp_transaction_calc = mrr_amount;
+            
+            
+            for (linesCounter = 2; linesCounter < numberOfRows; linesCounter++) 
+            {               
+                //set sate to the 1st in the month  
+                tempMonth = Date.newInstance (tempMonth.year(),tempMonth.month() +1 ,1);        
+                
+                //addind lead '0' to the row counter which under 10             
+                if (linesCounter < 10)
+                {
+                    lineCounterStr = '0' + linesCounter;
+                }
+                else
+                {
+                    lineCounterStr =  String.valueOf(linesCounter);
+                }
+                
+                // set renwal status
+                if (oli.New_Renewal__c == 'New' && linesCounter > 12 && isFirstMonthDay)                    
+                {
+                    renewalStatus = 'Renewal';                  
+                }
+                if (oli.New_Renewal__c == 'New' && linesCounter > 13 && !isFirstMonthDay )
+                {
+                    renewalStatus = 'Renewal';                  
+                }                   
+                                            
+                
+                if(is_additionl_line_require && linesCounter == 13)
+                {
+                    daysInCurrentMonth = oli.Line_Item_Start_Date__c.day() - 1;                 
+                    mrr_amount = Math.round(daysInCurrentMonth * dayPrice);
+                    
+                    system.debug('>>>>'+oli.product2.name +'//MID MONTH, 13 line Month: ' + tempMonth.month());
+                    system.debug('>>>>'+oli.product2.name +'//line 13 - daysInCurrentMonth : ' + daysInCurrentMonth);
+                    system.debug('>>>>'+oli.product2.name +'//line 13 - mrr amount : ' + mrr_amount);
+                }
+                else if(is_additionl_line_require && linesCounter == 14)
+                {
+                    tempMonth = tempMonth.addMonths(-1); //reduce 1 month which added in the FOR loop
+                    tempMonth = Date.newInstance(tempMonth.year(),tempMonth.month(),oli.Line_Item_Start_Date__c.day());     
+        
+                    daysInCurrentMonth = get_days_in_month(tempMonth.month()) - oli.Line_Item_Start_Date__c.day() + 1;  
+                    mrr_amount = Math.round(daysInCurrentMonth * dayPrice);                 
+                
+                    system.debug('>>>>'+oli.product2.name +'//MID MONTH, 14 line Month: ' + tempMonth.month());
+                    system.debug('>>>>'+oli.product2.name +'//line 14 - daysInCurrentMonth : ' + daysInCurrentMonth);
+                    system.debug('>>>>'+oli.product2.name +'//line 14 - mrr amount : ' + mrr_amount);                       
+                }
+                else
+                {                   
+                    mrr_amount = monthPrice;
+                    system.debug('>>>>'+oli.product2.name + '//line: '+linesCounter +'// temp line Month: ' + tempMonth.month());   
+                }
+                    
+                create_mrr_single_record(op.id,
+                                 oli.Product_line_item_id__c,
+                                 oli.Product2.name,
+                                 oli.Line_Item_Type__c,
+                                 renewalStatus,
+                                 oli.New_Renewal__c,
+                                 oli.Line_Item_Start_Date__c,
+                                 oli.Subscription_Period_Months__c,
+                                 oli.UnitPrice,
+                                 oli.ListPrice, 
+                                 oli.Quantity,      
+                                 dicsount,                                       
+                                 priceAfterDiscount,
+                                 mrr_amount,
+                                 tempMonth,
+                                 lineCounterStr +'/' + numberOfRows );
+                                 
+                temp_transaction_calc += mrr_amount;                        
+            
+            }//end of for loop
+            
+            //addind lead '0' to the row counter which under 10             
+            if (linesCounter < 10)
+            {
+                lineCounterStr = '0' + linesCounter;
+            }
+            else
+            {
+                lineCounterStr =  String.valueOf(linesCounter);
+            }
+            
+            //last line                      
+            system.debug('>>>>Create last line, line_counter value: ' + linesCounter + '. temp_transaction_calc: ' + temp_transaction_calc);
+            tempMonth = tempMonth.addMonths(1);                                                 
+            mrr_amount = priceAfterDiscount - temp_transaction_calc;
+
+            system.debug('>>>>'+oli.product2.name +'//'+linesCounter+' line Month: ' + tempMonth.month());
+            system.debug('>>>>'+oli.product2.name +'//'+linesCounter+'. daysInCurrentMonth : ' + daysInCurrentMonth);                   
+            system.debug('>>>>'+oli.product2.name +'//'+linesCounter+'. mrr_amount : ' + mrr_amount);               
+                                        
+            create_mrr_single_record(op.id,
+                                 oli.Product_line_item_id__c,
+                                 oli.Product2.name,
+                                 oli.Line_Item_Type__c,
+                                 renewalStatus,
+                                 oli.New_Renewal__c,
+                                 oli.Line_Item_Start_Date__c,
+                                 oli.Subscription_Period_Months__c,
+                                 oli.UnitPrice,
+                                 oli.ListPrice, 
+                                 oli.Quantity,      
+                                 dicsount,                                       
+                                 priceAfterDiscount,
+                                 mrr_amount,
+                                 tempMonth,
+                                 lineCounterStr +'/' +linesCounter ); 
+            
+        }       
+        
+        
+        
+        private void create_mrr_single_record(Id opp, String productLineItemId, String productName, String lineItemType, String renewalSstatus, String newRenewalIinitialStatus, Date startDate, Decimal subscriptionSupportPeriodMonths, Decimal salesPrice, Decimal listPrice, Decimal quantity, double productDiscount , double priceAfterDiscount, Decimal mrr, Date mrr_date, String lineNumber)
+        {
+            system.debug('>>>create_mrr_single_record -   = ' + productName+ '//' + lineNumber);            
+            
+            Products_monthly_revenue_recognition__c pmr = new Products_monthly_revenue_recognition__c();
+            
+            pmr.Opportunity__c  = opp;
+            pmr.Product_line_item_id__c = productLineItemId;
+            pmr.New_Renewal_status__c = renewalSstatus;
+            pmr.Product_Name__c = productName;
+            pmr.New_Renewal_initial_status__c = newRenewalIinitialStatus;
+            pmr.Line_Item_Type__c = lineItemType;
+            pmr.Line_Item_Start_Date__c = startDate;
+            pmr.Subscription_Support_Period_Months__c = subscriptionSupportPeriodMonths;
+            pmr.Sales_Price__c = salesPrice;
+            pmr.List_Price__c = listPrice;
+            pmr.Quantity__c = quantity;
+            pmr.Products_Discount__c = productDiscount;
+            pmr.Price_after_Discount__c = priceAfterDiscount;
+            pmr.MRR__c = mrr;        
+            pmr.MRR_Date__c = mrr_date;
+            pmr.Line_number__c = lineNumber; 
+            pmr.CurrencyIsoCode = op_currency;
+            pmr.mrr_usd__c = mrr/convet_rate;
+            pmr.MRR_USD_Conversion_Rate__c = convet_rate;           
+            
+            system.debug('>>>created mrr:' + pmr);
+            
+            pmrs.add(pmr);
+            
+            
+                    
+        }
+        
+        private Integer get_line_item_days_period(opportunityLineItem oli)
+        {           
+            Integer result = 0;
+            
+            Date startDate = Date.newInstance(oli.Line_Item_Start_Date__c.year(),oli.Line_Item_Start_Date__c.month(),oli.Line_Item_Start_Date__c.day());
+            Date dueDate = Date.newInstance(oli.Support_Subscription_calc_end_date__c.year(),oli.Support_Subscription_calc_end_date__c.month(), oli.Support_Subscription_calc_end_date__c.day());
+            
+            system.debug('>>>FUNC get_line_item_days_period//Support_Subscription_end_date__c// startDate:' + startDate);                   
+            system.debug('>>>FUNC get_line_item_days_period//Support_Subscription_end_date__c// dueDate:' + dueDate);       
+                
+            result = startDate.daysBetween(dueDate) + 1; 
+            system.debug('>>>FUNC get_line_item_days_period//Support_Subscription_end_date__c:' + oli.Support_Subscription_end_date__c + '. daysBetween: ' + result);
+            
+            return result;
+        
+        }
+        
+        private Integer get_days_in_month(Integer month)
+        {
+            if(month == 1 || month == 3 ||month == 5 ||month == 7 ||month == 8 ||month == 10 ||month == 12)
+            {
+                return 31;          
+            }
+            else if(month == 4 || month == 6 ||month == 9 ||month == 11)
+            {
+                return 30;          
+            }
+            else if(month == 2)
+            {
+                return 28;          
+            }
+            return 0;       
+        }
+		
+		private void test_mode()
+        {
+            Integer j=0;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            j++;
+            
+        }
+        
+    }

@@ -1,0 +1,256 @@
+@isTest(SeeAllData=true) 
+    private class MRR_ManagerTestClass 
+    {
+        
+        static testMethod void mid_month_perpetual_test() 
+        {  	
+			system.debug('>>>>Start test mid_month_perpetual_test');		
+            Account account = [select id from Account where name = 'Quali.com'];
+            
+            //create opportunity
+            Opportunity o = new Opportunity(
+            Territory__c = 'N.America',
+            Country__c = 'Brazil',          
+            Primary_Contact__c ='0032000000ve7PyAAI',
+            Name = 'test_test_test',            
+            AccountID = account.id, 
+            CloseDate = Date.newInstance(2017,8,23),                                    
+            Type = 'New Business',          
+            Forcast__c = 'Commit',
+            CurrencyIsoCode = 'USD',
+            Product_Category__c = 'Cloud',
+            Net_Order_to_QualiSystems__c = 100000,
+            Subscription_License_Amount__c = 100000,
+            Priority__c = 'High',
+            LeadSource = 'Web',                         
+            StageName = 'Closed Won Approved'                   
+            );  
+            insert o;
+            id opp_id = o.id;           
+            system.debug('>>>>New Opp id: '+ opp_id);
+            
+			//create the Opportunity
+            Opportunity opp = [select id, Name,Territory__c from opportunity where id =: opp_id];  
+            system.debug('>>>>Opportunity:' + opp);            
+            
+			
+            //create the product
+            Product2 p1 = new Product2(
+            name='CloudShell VE Perpetual',
+            IsActive=true,
+            Description='My Product',
+            ProductCode='CS-VE',//
+            Quote_code__c  = 'CS-VE'            
+            );
+            insert p1;
+            system.debug('>>>>Insert Product sucsess: ' + p1);            
+        
+            //create standardPrice PricebookEntry            
+			Id pricebookId = Test.getStandardPricebookId();	
+			system.debug('>>>>Standard Test ptricebiikId:' + pricebookId);
+			
+            //Pricebook2 stdPb = [select Id from Pricebook2 where isStandard=true limit 1];
+			//system.debug('>>>>Standard Pricebook2 :' + stdPb);
+			
+            PricebookEntry standardPrice = new PricebookEntry(
+            Pricebook2Id = pricebookId,//stdPb.id, 
+            Product2Id = p1.Id,             
+			UnitPrice = 100,
+            IsActive = true);
+			system.debug('>>>>Before Insert standardPrice: ' + standardPrice);   
+            insert standardPrice;
+            system.debug('>>>>Insert standardPrice: ' + standardPrice);   
+            
+			//Create oli               
+            system.debug('>>>>Start OLI creation');                             
+            opportunityLineItem oli = new opportunityLineItem(
+            opportunityId = opp_id,
+            PricebookEntryId = standardPrice.id,			
+			UnitPrice=200,
+            New_Renewal__c = 'New', 
+            Line_Item_Start_Date__c = Date.newInstance(2017,8,23),
+            Subscription_Period_Months__c = 3,
+            Quantity = 2,
+            Line_Item_Type__c  = 'Perpetual');           
+            
+			system.debug('>>>>Before creation OLI '+ oli);
+            insert oli;
+            system.debug('>>>>Insert OLI sucsess' + oli);               
+               
+                                    
+            // Get the just created MRR's
+            list<Products_monthly_revenue_recognition__c> mrr = new list<Products_monthly_revenue_recognition__c>([select id from Products_monthly_revenue_recognition__c where Opportunity__c =: opp_id AND Line_Item_Type__c =:'Perpetual']);
+            
+            system.debug('>>>>MRRs :' + mrr);
+            system.debug('>>>>MRR size:' + mrr.size());
+            System.assertEquals(38, mrr.size());
+            
+        }
+		
+		static testMethod void begining_month_perpetual_test() 
+        {
+			system.debug('>>>>Start test begining_month_perpetual_test');		
+            Account account = [select id from Account where name = 'Quali.com'];
+            
+            //create opportunity
+            Opportunity o = new Opportunity(
+            Territory__c = 'N.America',
+            Country__c = 'Brazil',          
+            Primary_Contact__c ='0032000000ve7PyAAI',
+            Name = 'test_test_test',            
+            AccountID = account.id, 
+            CloseDate = Date.newInstance(2017,8,23),                                    
+            Type = 'New Business',          
+            Forcast__c = 'Commit',
+            CurrencyIsoCode = 'USD',
+            Product_Category__c = 'Cloud',
+            Net_Order_to_QualiSystems__c = 100000,
+            Subscription_License_Amount__c = 100000,
+            Priority__c = 'High',
+            LeadSource = 'Web',                         
+            StageName = 'Closed Won Approved'                   
+            );  
+            insert o;
+            id opp_id = o.id;           
+            system.debug('>>>>New Opp id: '+ opp_id);
+            
+			//create the Opportunity
+            Opportunity opp = [select id, Name,Territory__c from opportunity where id =: opp_id];  
+            system.debug('>>>>Opportunity:' + opp);            
+            
+			
+            //create the product
+            Product2 p1 = new Product2(
+            name='CloudShell VE Perpetual',
+            IsActive=true,
+            Description='My Product',
+            ProductCode='CS-VE',//
+            Quote_code__c  = 'CS-VE'            
+            );
+            insert p1;
+            system.debug('>>>>Insert Product sucsess: ' + p1);            
+        
+            //create standardPrice PricebookEntry            
+			Id pricebookId = Test.getStandardPricebookId();	
+			system.debug('>>>>Standard Test ptricebiikId:' + pricebookId);
+			
+            //Pricebook2 stdPb = [select Id from Pricebook2 where isStandard=true limit 1];
+			//system.debug('>>>>Standard Pricebook2 :' + stdPb);
+			
+            PricebookEntry standardPrice = new PricebookEntry(
+            Pricebook2Id = pricebookId,//stdPb.id, 
+            Product2Id = p1.Id,             
+			UnitPrice = 100,
+            IsActive = true);
+			system.debug('>>>>Before Insert standardPrice: ' + standardPrice);   
+            insert standardPrice;
+            system.debug('>>>>Insert standardPrice: ' + standardPrice);   
+            
+			//Create oli               
+            system.debug('>>>>Start OLI creation');                             
+            opportunityLineItem oli = new opportunityLineItem(
+            opportunityId = opp_id,
+            PricebookEntryId = standardPrice.id,			
+			UnitPrice=200,
+            New_Renewal__c = 'New', 
+            Line_Item_Start_Date__c = Date.newInstance(2017,8,1),
+            Subscription_Period_Months__c = 3,
+            Quantity = 2,
+            Line_Item_Type__c  = 'Perpetual');           
+            
+			system.debug('>>>>Before creation OLI '+ oli);
+            insert oli;
+            system.debug('>>>>Insert OLI sucsess' + oli);               
+               
+                                    
+            // Get the just created MRR's
+            list<Products_monthly_revenue_recognition__c> mrr = new list<Products_monthly_revenue_recognition__c>([select id from Products_monthly_revenue_recognition__c where Opportunity__c =: opp_id AND Line_Item_Type__c =:'Perpetual']);
+            
+            system.debug('>>>>MRRs :' + mrr);
+            system.debug('>>>>MRR size:' + mrr.size());
+            System.assertEquals(36, mrr.size());
+            			
+		}
+		
+		static testMethod void mid_month_subsription_test() 
+        {
+			system.debug('>>>>Start test mid_month_subsription_test');		
+            Account account = [select id from Account where name = 'Quali.com'];
+            
+            //create opportunity
+            Opportunity o = new Opportunity(
+            Territory__c = 'N.America',
+            Country__c = 'Brazil',          
+            Primary_Contact__c ='0032000000ve7PyAAI',
+            Name = 'test_test_test',            
+            AccountID = account.id, 
+            CloseDate = Date.newInstance(2017,8,23),                                    
+            Type = 'New Business',          
+            Forcast__c = 'Commit',
+            CurrencyIsoCode = 'USD',
+            Product_Category__c = 'Cloud',
+            Net_Order_to_QualiSystems__c = 100000,
+            Subscription_License_Amount__c = 100000,
+            Priority__c = 'High',
+            LeadSource = 'Web',                         
+            StageName = 'Closed Won Approved'                   
+            );  
+            insert o;
+            id opp_id = o.id;           
+            system.debug('>>>>New Opp id: '+ opp_id);
+            
+			//create the Opportunity
+            Opportunity opp = [select id, Name,Territory__c from opportunity where id =: opp_id];  
+            system.debug('>>>>Opportunity:' + opp);            
+            
+			
+            //create the product
+            Product2 p1 = new Product2(
+            name='Business Intelligence',
+            IsActive=true,
+            Description='My Product',
+            ProductCode='CS-BI',//
+            Quote_code__c  = 'CS-BI'            
+            );
+            insert p1;
+            system.debug('>>>>Insert Product sucsess: ' + p1);            
+        
+            //create standardPrice PricebookEntry            
+			Id pricebookId = Test.getStandardPricebookId();	
+			system.debug('>>>>Standard Test ptricebiikId:' + pricebookId);
+			
+            PricebookEntry standardPrice = new PricebookEntry(
+            Pricebook2Id = pricebookId,
+            Product2Id = p1.Id,             
+			UnitPrice = 100,
+            IsActive = true);
+			system.debug('>>>>Before Insert standardPrice: ' + standardPrice);   
+            insert standardPrice;
+            system.debug('>>>>Insert standardPrice: ' + standardPrice);   
+            
+			//Create oli               
+            system.debug('>>>>Start OLI creation');                             
+            opportunityLineItem oli = new opportunityLineItem(
+            opportunityId = opp_id,
+            PricebookEntryId = standardPrice.id,			
+			UnitPrice=200,
+            New_Renewal__c = 'New', 
+            Line_Item_Start_Date__c = Date.newInstance(2017,8,15),
+            Subscription_Period_Months__c = 12,
+            Quantity = 2,
+            Line_Item_Type__c  = 'Monthly Subscription');           
+            
+			system.debug('>>>>Before creation OLI '+ oli);
+            insert oli;
+            system.debug('>>>>Insert OLI sucsess' + oli);               
+               
+                                    
+            // Get the just created MRR's
+            list<Products_monthly_revenue_recognition__c> mrr = new list<Products_monthly_revenue_recognition__c>([select id from Products_monthly_revenue_recognition__c where Opportunity__c =: opp_id]);// AND Line_Item_Type__c =:'Monthly Subscription']);
+            
+            system.debug('>>>>MRRs :' + mrr);
+            system.debug('>>>>MRR size:' + mrr.size());
+            System.assertEquals(13, mrr.size());
+		}
+			
+    }
